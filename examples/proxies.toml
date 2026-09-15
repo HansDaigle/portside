@@ -1,0 +1,11 @@
+[[proxies]]
+id = "example"
+name = "Example website"
+port = 4444
+upstream = "https://example.com"
+
+[[proxies]]
+id = "second"
+name = "Second destination"
+port = 5555
+upstream = "https://example.org"

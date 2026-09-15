@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Portside — Local connections</title>
+    <link rel="icon" href="/static/favicon.png" type="image/png" sizes="64x64" />
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to connections</a>
+    <aside class="sidebar">
+      <a href="#main" class="brand"
+        ><img src="/static/logo.png" alt="" width="36" height="36" /><span
+          >portside<span class="brand-dot">.</span></span
+        ></a
+      >
+      <div class="workspace-label">PERSONAL WORKSPACE</div>
+      <nav aria-label="Main">
+        <button
+          type="button"
+          id="connections-button"
+          class="nav-item selected"
+          aria-current="page"
+        >
+          <span aria-hidden="true">↔</span> Connections
+          <span class="nav-count" id="nav-count">0</span></button
+        ><button class="nav-item" id="help-button">
+          <span aria-hidden="true">?</span> Quick guide
+        </button>
+      </nav>
+      <div class="sidebar-note">
+        <span class="mini-heading">A shorter way there.</span>
+        <p>Remote destinations,<br />right at your local port.</p>
+        <code>portside ui</code>
+      </div>
+      <div class="sidebar-footer">
+        <span class="dot"></span> Runs on your machine
+        <span id="version">v0.1</span>
+      </div>
+    </aside>
+    <main id="main">
+      <header class="topbar">
+        <span>Workspace <span class="separator">/</span> Connections</span
+        ><span class="local-badge"><span class="dot"></span> LOCAL ONLY</span>
+      </header>
+      <section class="page-heading">
+        <div>
+          <p class="eyebrow">MAKE YOURSELF AT HOME</p>
+          <h1>Your local connections.</h1>
+          <p class="subtitle">Give any destination a place on your machine.</p>
+        </div>
+        <button class="primary" id="add-button">
+          <span aria-hidden="true">＋</span> New connection
+        </button>
+      </section>
+      <div id="banner" role="alert" hidden></div>
+      <div class="overview">
+        <span><strong id="running-count">0</strong> running</span
+        ><span><strong id="saved-count">0</strong> saved connections</span
+        ><span class="engine-status" id="engine-status">Connecting…</span>
+      </div>
+      <section class="connections" aria-label="Saved connections">
+        <div class="toolbar">
+          <div class="filters" role="group" aria-label="Filter connections">
+            <button data-filter="all" aria-pressed="true">
+              All connections</button
+            ><button data-filter="running" aria-pressed="false">Running</button
+            ><button data-filter="stopped" aria-pressed="false">Stopped</button>
+          </div>
+          <label class="search"
+            ><span class="sr-only">Search connections</span
+            ><svg
+              width="17"
+              height="17"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              aria-hidden="true"
+            >
+              <circle cx="10.5" cy="10.5" r="6.5" />
+              <path d="m16 16 5 5" /></svg
+            ><input id="search" type="search" placeholder="Find a connection…"
+          /></label>
+        </div>
+        <div id="connection-list">
+          <div class="loading">Loading your connections…</div>
+        </div>
+      </section>
+      <footer class="page-footer">
+        <span>One local port. An open connection.</span
+        ><button class="text-button" id="config-button">
+          View configuration path <span aria-hidden="true">↗</span>
+        </button>
+      </footer>
+    </main>
+    <dialog id="editor" aria-labelledby="editor-title">
+      <form id="connection-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">A NEW WAY IN</p>
+            <h2 id="editor-title">New connection</h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button close-dialog"
+            aria-label="Close dialog"
+          >
+            ×
+          </button>
+        </div>
+        <label
+          >Name<input
+            name="name"
+            required
+            maxlength="80"
+            placeholder="My website"
+            autocomplete="off"
+        /></label>
+        <div class="form-grid">
+          <label
+            >Local port<input
+              name="port"
+              type="number"
+              min="1024"
+              max="65535"
+              value="4444"
+              required /></label
+          ><label
+            >Destination<input
+              name="upstream"
+              type="url"
+              required
+              placeholder="https://example.com"
+              autocomplete="off"
+          /></label>
+        </div>
+        <div class="route-preview">
+          <span class="dot"></span><code id="preview-local">localhost:4444</code
+          ><span aria-hidden="true">→</span
+          ><code id="preview-remote">your destination</code>
+        </div>
+        <details class="advanced">
+          <summary>Browser compatibility <span>Optional</span></summary>
+          <div class="advanced-content">
+            <label
+              >Local hostname<input
+                name="local_host"
+                value="localhost"
+                placeholder="website.localhost"
+                autocomplete="off"
+            /></label>
+            <p class="field-help">
+              Use a separate .localhost name for each logged-in site. Cookies
+              are shared across ports on the same hostname.
+            </p>
+            <label class="check"
+              ><input name="https" type="checkbox" /><span
+                >Use local HTTPS<small
+                  >Requires trusting a local certificate in your browser.</small
+                ></span
+              ></label
+            ><label class="check"
+              ><input name="rewrite_cookies" type="checkbox" /><span
+                >Translate cookie domains<small
+                  >Map exact destination-domain cookies to the local
+                  hostname.</small
+                ></span
+              ></label
+            ><label class="check"
+              ><input name="rewrite_origin" type="checkbox" /><span
+                >Translate matching origins<small
+                  >Send this local page's Origin and Referer as the
+                  destination.</small
+                ></span
+              ></label
+            >
+            <p class="field-help">
+              Login support depends on the site. Embedded URLs and external
+              login callbacks may still use the public domain.
+            </p>
+          </div>
+        </details>
+        <p class="form-error" id="form-error" role="alert" hidden></p>
+        <div class="dialog-footer">
+          <button type="button" class="secondary close-dialog">Cancel</button
+          ><button type="submit" class="primary" id="save-button">
+            Save connection
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="info-dialog" aria-labelledby="info-title">
+      <div class="dialog-heading">
+        <h2 id="info-title">Quick guide</h2>
+        <button class="icon-button close-dialog" aria-label="Close dialog">
+          ×
+        </button>
+      </div>
+      <div id="info-content"></div>
+      <div class="dialog-footer">
+        <button class="secondary close-dialog">Close</button>
+      </div>
+    </dialog>
+    <dialog id="delete-dialog" aria-labelledby="delete-title">
+      <h2 id="delete-title">Delete connection?</h2>
+      <p id="delete-description"></p>
+      <p class="form-error" id="delete-error" role="alert" hidden></p>
+      <div class="dialog-footer">
+        <button class="secondary close-dialog">Keep connection</button
+        ><button class="danger" id="confirm-delete">Delete connection</button>
+      </div>
+    </dialog>
+    <dialog id="details-dialog" aria-labelledby="details-title">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">CONNECTION ACTIVITY</p>
+          <h2 id="details-title">Connection details</h2>
+        </div>
+        <button class="icon-button close-dialog" aria-label="Close details">
+          ×
+        </button>
+      </div>
+      <div id="details-content"></div>
+      <p class="field-help">
+        Completed requests only. Streaming requests and WebSockets appear when
+        they close. Duration includes the full request. History stays in memory
+        and resets when this connection is restarted or edited.
+      </p>
+      <h3 class="events-heading">Recent events</h3>
+      <div id="details-events"></div>
+      <div class="dialog-footer">
+        <button class="secondary close-dialog">Close</button>
+      </div>
+    </dialog>
+    <div id="toast" role="status" hidden></div>
+  </body>
+</html>

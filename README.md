@@ -1,2 +1,59 @@
-# localproxy
-Local reverse proxies with a CLI and web UI, powered by Caddy.
+# Portside
+
+<img src="src/portside/static/logo.png" alt="Portside logo" width="80" />
+
+Remote destinations. Local ports. A local dashboard and CLI for saved reverse proxies, powered by Caddy.
+
+![Portside dashboard with live connection graphs](docs/images/dashboard.jpg)
+
+Manage connections on one page. Each connection shows request volume and average duration over the last minute; setup, totals, and recent events open in dialogs.
+
+<details>
+<summary>Connection details</summary>
+
+![Connection activity and details dialog](docs/images/connection-details.jpg)
+
+</details>
+
+Screenshots use local demo traffic. Metrics stay in memory and reset when a connection starts. Streaming requests and WebSockets count when they finish.
+
+## Start on macOS
+
+Double-click **[Start Portside.command](Start%20Portside.command)** in Finder. It starts the app in Terminal and opens your default browser. Keep Terminal open; press **Ctrl+C** to stop. Double-clicking again reopens an already-running dashboard.
+
+First time only, install the prerequisites with `brew install uv caddy`. The launcher sets up Python dependencies automatically. Keep it in this project folder; a Finder alias can go on your Desktop.
+
+## Develop locally
+
+Requires Python 3.11+, uv, and Caddy on macOS or Linux.
+
+```sh
+brew install caddy uv
+uv sync --extra dev
+uv run portside ui
+```
+
+Open http://127.0.0.1:9876. Create a mapping and press **Start**. Ctrl+C stops the dashboard and its proxies; saved mappings remain.
+
+```sh
+uv run portside --port 4444 --to https://example.com
+uv run portside --config examples/proxies.toml
+uv run portside ui --config examples/proxies.toml
+uv run portside doctor
+uv run pytest
+```
+
+Use `uv tool install --editable .` to install the command outside this checkout.
+
+## Behavior
+
+- IPv4 loopback listeners only; no public hosting or LAN exposure.
+- HTTP/HTTPS upstreams, custom ports, paths, queries, uploads, redirects, and WebSockets.
+- One Caddy process per mapping. Stopping one leaves others alone.
+- Default config: `~/.config/portside/proxies.toml`. Runtime state: `~/.local/state/portside/`.
+- The dashboard opens saved mappings stopped. The config CLI starts all mappings together.
+- One manager owns a config file at a time. Stop it before editing the file externally.
+- Local HTTPS is optional; certificate trust is installed explicitly by the user.
+- Running means the proxy is listening, not that its upstream has passed a health check.
+
+See [the plan](docs/PLAN.md) and [browser compatibility](docs/BROWSER-COMPATIBILITY.md).

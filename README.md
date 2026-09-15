@@ -51,7 +51,7 @@ Use `uv tool install --editable .` to install the command outside this checkout.
 - HTTP/HTTPS upstreams, custom ports, paths, queries, uploads, redirects, and WebSockets.
 - One Caddy process per mapping. Stopping one leaves others alone.
 - Default config: `~/.config/portside/proxies.toml`. Runtime state: `~/.local/state/portside/`.
-- The dashboard opens saved mappings stopped. The config CLI starts all mappings together.
+- After a clean shutdown, saved mappings open stopped. If a previous session crashed and left proxies running, the dashboard verifies their ownership and restarts them automatically to restore controls and graphs. Existing connections briefly reconnect; counters reset. The config CLI starts all mappings together.
 - One manager owns a config file at a time. Stop it before editing the file externally.
 - Local HTTPS is optional; certificate trust is installed explicitly by the user.
 - Running means the proxy is listening, not that its upstream has passed a health check.

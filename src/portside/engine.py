@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import socket
-import tempfile
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -14,6 +13,7 @@ from urllib.parse import urlsplit
 
 from .metrics import TrafficMetrics
 from .models import PortsideError, validate_mappings
+from .recovery import RunRecord, records
 from .storage import default_state
 
 
@@ -85,6 +85,7 @@ def caddyfile(mapping):
 class Runtime:
     process: asyncio.subprocess.Process | None = None
     reader: asyncio.Task | None = None
+    record: RunRecord | None = None
     status: str = "stopped"
     error: str | None = None
     events: deque = field(default_factory=lambda: deque(maxlen=30))
@@ -104,6 +105,34 @@ class Manager:
         self.binary = binary or shutil.which("caddy")
         self.reserved_ports = set(reserved_ports)
         self.lock = asyncio.Lock()
+
+    async def recover(self):
+        """Called once, after acquiring the config lock and before serving requests."""
+        owner = self.store.path if self.store else None
+        restart = set()
+        for record in records(self.state_dir, owner):
+            identifier = record.data["mapping"].get("id")
+            runtime = self.runtimes.get(identifier)
+            try:
+                survived = await record.stop_survivor()
+                record.remove()
+                if survived and runtime:
+                    runtime.event("Recovered a proxy left running by an interrupted session")
+                    if self.mappings[identifier].to_dict() == record.data["mapping"]:
+                        restart.add(identifier)
+                    else:
+                        runtime.event("Previous proxy stopped because its saved settings changed")
+            except (OSError, PortsideError) as error:
+                if runtime:
+                    runtime.status = "error"
+                    runtime.error = str(error)
+                    runtime.event(runtime.error)
+        for identifier in restart:
+            try:
+                await self.start(identifier)
+                self.runtimes[identifier].event("Recovery complete; live activity restarted")
+            except PortsideError:
+                pass  # Keep the startup error visible without taking down the dashboard.
 
     def snapshot(self):
         result = []
@@ -200,7 +229,7 @@ class Manager:
             if mapping.port in self.reserved_ports:
                 raise PortsideError("This port is reserved for the dashboard.")
             if runtime.reader:
-                await runtime.reader
+                await self._stop(runtime)
             runtime.error = None
             runtime.status = "starting"
             runtime.event("Starting local listener")
@@ -208,44 +237,43 @@ class Manager:
                 with socket.socket() as probe:
                     probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     probe.bind(("127.0.0.1", mapping.port))
-                self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-                with tempfile.TemporaryDirectory(prefix="run-", dir=self.state_dir) as temp:
-                    config = Path(temp) / "Caddyfile"
-                    config.write_text(caddyfile(mapping))
-                    env = {
-                        **os.environ,
-                        "XDG_DATA_HOME": str(self.state_dir / "caddy/data"),
-                        "XDG_CONFIG_HOME": str(self.state_dir / "caddy/config"),
-                    }
-                    runtime.metrics = TrafficMetrics()
-                    runtime.process = await asyncio.create_subprocess_exec(
-                        self.binary,
-                        "run",
-                        "--config",
-                        str(config),
-                        "--adapter",
-                        "caddyfile",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                        env=env,
-                        start_new_session=True,
-                    )
-                    runtime.reader = asyncio.create_task(self._read_output(runtime))
-                    for _ in range(100):
-                        await asyncio.sleep(0.05)
-                        if runtime.process.returncode is not None:
-                            await runtime.reader
-                            raise PortsideError(runtime.error or "Caddy could not start.")
-                        try:
-                            _, writer = await asyncio.open_connection("127.0.0.1", mapping.port)
-                        except OSError:
-                            continue
-                        writer.close()
-                        await writer.wait_closed()
-                        runtime.status = "running"
-                        runtime.event(f"Listening at {mapping.local_url}")
-                        return
-                    raise PortsideError("Caddy did not open the local port within 5 seconds.")
+                runtime.record = RunRecord.create(
+                    self.state_dir,
+                    self.store.path if self.store else None,
+                    mapping,
+                    self.binary,
+                    caddyfile(mapping),
+                )
+                env = {
+                    **os.environ,
+                    "XDG_DATA_HOME": str(self.state_dir / "caddy/data"),
+                    "XDG_CONFIG_HOME": str(self.state_dir / "caddy/config"),
+                }
+                runtime.metrics = TrafficMetrics()
+                runtime.process = await asyncio.create_subprocess_exec(
+                    *runtime.record.data["argv"],
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env,
+                    start_new_session=True,
+                )
+                runtime.reader = asyncio.create_task(self._read_output(runtime))
+                runtime.record.attach(runtime.process.pid)
+                for _ in range(100):
+                    await asyncio.sleep(0.05)
+                    if runtime.process.returncode is not None:
+                        await runtime.reader
+                        raise PortsideError(runtime.error or "Caddy could not start.")
+                    try:
+                        _, writer = await asyncio.open_connection("127.0.0.1", mapping.port)
+                    except OSError:
+                        continue
+                    writer.close()
+                    await writer.wait_closed()
+                    runtime.status = "running"
+                    runtime.event(f"Listening at {mapping.local_url}")
+                    return
+                raise PortsideError("Caddy did not open the local port within 5 seconds.")
             except (OSError, PortsideError) as error:
                 await self._stop(runtime)
                 runtime.status = "error"
@@ -269,6 +297,9 @@ class Manager:
                 await process.wait()
         if runtime.reader:
             await runtime.reader
+        if runtime.record:
+            runtime.record.remove()
+            runtime.record = None
         runtime.process = None
         runtime.reader = None
         runtime.status = "stopped"

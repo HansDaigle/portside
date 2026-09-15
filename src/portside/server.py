@@ -62,6 +62,7 @@ def create_app(config_path, port=9876, state_dir=None):
             from .engine import Runtime
 
             manager.runtimes = {m.id: Runtime() for m in mappings}
+            await manager.recover()
             yield
         finally:
             await manager.close()

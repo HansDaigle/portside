@@ -42,7 +42,7 @@ def parser():
 async def run(args):
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         loop.add_signal_handler(sig, stop.set)
     if args.command == "ui":
         if not 1024 <= args.ui_port <= 65535:
@@ -79,6 +79,9 @@ async def run(args):
                 )
             ]
         manager = Manager(mappings)
+        if store:
+            manager.store = store
+            await manager.recover()
         for mapping in mappings:
             await manager.start(mapping.id)
             print(f"{mapping.local_url} → {mapping.upstream}", flush=True)

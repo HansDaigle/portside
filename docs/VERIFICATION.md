@@ -2,7 +2,7 @@
 
 Environment: macOS, Python 3.12.12, Caddy 2.11.4. Python dependencies are recorded in `uv.lock`.
 
-Result: 44 tests passed; Ruff lint and formatting checks passed. The initial source distribution and wheel built successfully; the wheel contained all dashboard assets and its installed CLI returned `Portside 0.1.0` in an isolated environment.
+Result: 50 tests passed; Ruff lint and formatting checks passed. The initial source distribution and wheel built successfully; the wheel contained all dashboard assets and its installed CLI returned `Portside 0.1.0` in an isolated environment.
 
 ## Automated coverage
 
@@ -16,6 +16,8 @@ Result: 44 tests passed; Ruff lint and formatting checks passed. The initial sou
 - Rejection of an untrusted HTTPS upstream certificate.
 - Dashboard CRUD, persistence, validation, Host checks, and cross-origin/token rejection.
 - Multi-mapping CLI startup, SIGTERM shutdown, listener cleanup, and lock release.
+- Forced manager termination with two surviving Caddy processes, followed by dashboard recovery, fresh traffic metrics, and working stop controls. A different config sharing the same runtime directory remains untouched.
+- SIGHUP cleanup (Terminal hangup), PID reuse/command/executable mismatch protection, and recovery when the manager exits before recording a child's PID.
 - Browser launch after server readiness, existing-dashboard reuse for the same config, and manual URL fallback if browser opening fails.
 - Bounded 60-second traffic history, weighted duration, error totals, malformed metric rejection, and reset on start.
 - Real Caddy access logs feed metrics with request fields, response headers, and user IDs removed at the source; test cookies and private query content do not appear in emitted entries.
@@ -41,4 +43,4 @@ Metrics count completed requests, including streams and WebSockets only after th
 - Real website authentication, OAuth callbacks, parent-domain cookies, and origin-bound features need user-selected target sites.
 - Browser/OS certificate trust setup is intentionally manual and has not been performed.
 - Dashboard delete is covered through HTTP integration tests; its rendered confirmation dialog has not been exercised end to end.
-- Hard-kill/orphan recovery and distribution CI are later milestones.
+- Distribution CI is a later milestone. Proxies created before ownership records existed need a one-time verified cleanup; they cannot be automatically attributed from a port number alone.

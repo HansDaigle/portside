@@ -47,7 +47,8 @@ Compatibility is site-specific. Arbitrary public-site logins cannot be guarantee
 - [ ] Installation/upgrade smoke tests.
 - [ ] Background service lifecycle if requested; no login item in v0.1.
 - [ ] CI, release packaging, and license selection.
-- [ ] Crash recovery for force-killed managers and a dependency compatibility policy.
+- [x] Recover proxies left behind by an interrupted dashboard using private ownership records and verified process identity; handle Terminal hangup gracefully.
+- [ ] Dependency compatibility policy.
 
 ## Verification gates
 

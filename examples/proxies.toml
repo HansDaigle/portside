@@ -9,3 +9,8 @@ id = "second"
 name = "Second destination"
 port = 5555
 upstream = "https://example.org"
+
+[[projects]]
+id = "example-workspace"
+name = "Example workspace"
+proxy_ids = ["example", "second"]

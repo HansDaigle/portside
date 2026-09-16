@@ -55,13 +55,14 @@ async def run(args):
         return
     store = None
     manager = None
+    projects = []
     try:
         if args.config:
             if not args.config.is_file():
                 raise PortsideError(f"Config file does not exist: {args.config}")
             store = Store(args.config)
             store.acquire()
-            mappings = store.load()
+            mappings, projects = store.load_config()
             if not mappings:
                 raise PortsideError("This config has no mappings.")
         else:
@@ -78,9 +79,8 @@ async def run(args):
                     }
                 )
             ]
-        manager = Manager(mappings)
+        manager = Manager(mappings, store=store, projects=projects)
         if store:
-            manager.store = store
             await manager.recover()
         for mapping in mappings:
             await manager.start(mapping.id)

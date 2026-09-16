@@ -9,7 +9,7 @@ from aiohttp import web
 
 from . import __version__
 from .engine import Manager
-from .models import Mapping, PortsideError
+from .models import Mapping, PortsideError, Project
 from .storage import Store
 
 STATIC = Path(__file__).parent / "static"
@@ -17,7 +17,10 @@ STATIC = Path(__file__).parent / "static"
 
 def create_app(config_path, port=9876, state_dir=None):
     store = Store(config_path)
-    manager = Manager(store.load(), store=store, state_dir=state_dir, reserved_ports={port})
+    mappings, projects = store.load_config()
+    manager = Manager(
+        mappings, store=store, state_dir=state_dir, reserved_ports={port}, projects=projects
+    )
     token = secrets.token_urlsafe(32)
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
@@ -57,8 +60,9 @@ def create_app(config_path, port=9876, state_dir=None):
         store.acquire()
         try:
             # Read again after locking, in case another process saved during startup.
-            mappings = store.load()
+            mappings, projects = store.load_config()
             manager.mappings = {m.id: m for m in mappings}
+            manager.projects = {p.id: p for p in projects}
             from .engine import Runtime
 
             manager.runtimes = {m.id: Runtime() for m in mappings}
@@ -72,6 +76,7 @@ def create_app(config_path, port=9876, state_dir=None):
         return web.json_response(
             {
                 "proxies": manager.snapshot(),
+                "projects": manager.project_snapshot(),
                 "token": token,
                 "caddy_available": bool(manager.binary),
                 "config_path": str(store.path),
@@ -107,6 +112,27 @@ def create_app(config_path, port=9876, state_dir=None):
     async def index(request):
         return web.FileResponse(STATIC / "index.html")
 
+    async def save_project(request):
+        data = await request.json()
+        identifier = request.match_info.get("identifier")
+        if identifier:
+            if not isinstance(data, dict):
+                raise PortsideError("Expected a project object.")
+            data = {**data, "id": identifier}
+        await manager.save_project(Project.parse(data), existing_id=identifier)
+        return web.json_response({"ok": True})
+
+    async def delete_project(request):
+        await manager.delete_project(request.match_info["identifier"])
+        return web.json_response({"ok": True})
+
+    async def project_action(request):
+        return web.json_response(
+            await manager.project_action(
+                request.match_info["identifier"], request.match_info["action"]
+            )
+        )
+
     async def asset(request):
         name = request.match_info["name"]
         if name not in {"app.js", "style.css", "mark.svg", "logo.png", "favicon.png"}:
@@ -124,6 +150,10 @@ def create_app(config_path, port=9876, state_dir=None):
             web.put("/api/proxies/{identifier}", save),
             web.delete("/api/proxies/{identifier}", delete),
             web.post("/api/proxies/{identifier}/{action}", action),
+            web.post("/api/projects", save_project),
+            web.put("/api/projects/{identifier}", save_project),
+            web.delete("/api/projects/{identifier}", delete_project),
+            web.post("/api/projects/{identifier}/{action}", project_action),
         ]
     )
     return app

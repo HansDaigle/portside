@@ -6,7 +6,7 @@ from pathlib import Path
 
 import tomli_w
 
-from .models import Mapping, PortsideError, validate_mappings
+from .models import Mapping, PortsideError, Project, validate_mappings, validate_projects
 
 
 def default_config():
@@ -44,26 +44,41 @@ class Store:
             self._lock = None
 
     def load(self):
+        return self.load_config()[0]
+
+    def load_config(self):
         if not self.path.exists():
-            return []
+            return [], []
         try:
             with self.path.open("rb") as stream:
                 data = tomllib.load(stream)
         except (OSError, tomllib.TOMLDecodeError) as error:
             raise PortsideError(f"Cannot read config: {error}") from error
-        if set(data) - {"proxies"} or not isinstance(data.get("proxies", []), list):
-            raise PortsideError("Config must contain only a list of [[proxies]] entries.")
+        if (
+            set(data) - {"proxies", "projects"}
+            or not isinstance(data.get("proxies", []), list)
+            or not isinstance(data.get("projects", []), list)
+        ):
+            raise PortsideError("Config accepts [[proxies]] and [[projects]] entries.")
         mappings = [Mapping.parse(item) for item in data.get("proxies", [])]
+        projects = [Project.parse(item) for item in data.get("projects", [])]
         validate_mappings(mappings)
-        return mappings
+        validate_projects(projects, mappings)
+        return mappings, projects
 
-    def save(self, mappings):
+    def save(self, mappings, projects=None):
+        if projects is None:
+            projects = self.load_config()[1]
         validate_mappings(mappings)
+        validate_projects(projects, mappings)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, temp_path = tempfile.mkstemp(prefix=".portside-", dir=self.path.parent)
         try:
             with os.fdopen(fd, "wb") as stream:
-                tomli_w.dump({"proxies": [m.to_dict() for m in mappings]}, stream)
+                data = {"proxies": [m.to_dict() for m in mappings]}
+                if projects:
+                    data["projects"] = [p.to_dict() for p in projects]
+                tomli_w.dump(data, stream)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temp_path, self.path)

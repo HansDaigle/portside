@@ -2,7 +2,7 @@
 
 Environment: macOS, Python 3.12.12, Caddy 2.11.4. Python dependencies are recorded in `uv.lock`.
 
-Result: 50 tests passed; Ruff lint and formatting checks passed. The initial source distribution and wheel built successfully; the wheel contained all dashboard assets and its installed CLI returned `Portside 0.1.0` in an isolated environment.
+Result: 60 tests passed; Ruff lint and formatting checks passed (2026-09-16). The initial source distribution and wheel built successfully; the wheel contained all dashboard assets and its installed CLI returned `Portside 0.1.0` in an isolated environment.
 
 ## Automated coverage
 
@@ -20,6 +20,8 @@ Result: 50 tests passed; Ruff lint and formatting checks passed. The initial sou
 - SIGHUP cleanup (Terminal hangup), PID reuse/command/executable mismatch protection, and recovery when the manager exits before recording a child's PID.
 - Browser launch after server readiness, existing-dashboard reuse for the same config, and manual URL fallback if browser opening fails.
 - Bounded 60-second traffic history, weighted duration, error totals, malformed metric rejection, and reset on start.
+- Project config round-trip and legacy loading, invalid/double membership, duplicate names, guarded CRUD, restart persistence, partial starts, repeated/concurrent starts, retry, and stop isolation.
+- Project rename/membership changes keep an open WebSocket and proxy PID intact; project deletion keeps its connections. Crash recovery restores project running counts.
 - Real Caddy access logs feed metrics with request fields, response headers, and user IDs removed at the source; test cookies and private query content do not appear in emitted entries.
 
 Run with `uv run pytest` and `uv run ruff check .`.
@@ -34,6 +36,7 @@ Verified in the Codex in-app browser:
 - Desktop layout inspected at the browser's actual widths (924px and 1280px).
 - No unexpected console errors during the initial successful flow.
 - Live request/duration graphs and activity details on the same page, using two controlled local upstreams. README screenshots show this demo traffic.
+- Project dialog creation/assignment, occupied-port feedback (2/3 running), Retry to 3/3, rename and removal of a running member, group stop leaving Ungrouped running, and project deletion preserving all three connections. No console warnings or errors in this flow.
 
 Metrics count completed requests, including streams and WebSockets only after they close. Durations measure the full request. Numeric aggregates stay in memory; traffic content is not retained.
 

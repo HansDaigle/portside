@@ -109,3 +109,51 @@ def validate_mappings(mappings):
         values = [getattr(m, field) for m in mappings]
         if len(values) != len(set(values)):
             raise PortsideError(f"Every mapping needs a unique {field}.")
+
+
+@dataclass(frozen=True)
+class Project:
+    id: str
+    name: str
+    proxy_ids: tuple[str, ...] = ()
+
+    @classmethod
+    def parse(cls, data):
+        if not isinstance(data, dict) or set(data) - {"id", "name", "proxy_ids"}:
+            raise PortsideError("Expected a project with a name and connection IDs.")
+        identifier = data.get("id", uuid4().hex[:12])
+        name = data.get("name", "")
+        members = data.get("proxy_ids", [])
+        if not isinstance(identifier, str) or not re.fullmatch(r"[a-z0-9-]{1,64}", identifier):
+            raise PortsideError("Project ID must use lowercase letters, digits, or hyphens.")
+        if (
+            not isinstance(name, str)
+            or not 1 <= len(name.strip()) <= 80
+            or any(ord(c) < 32 for c in name)
+        ):
+            raise PortsideError("Give the project a name between 1 and 80 characters.")
+        if (
+            not isinstance(members, list)
+            or not all(isinstance(m, str) for m in members)
+            or len(members) != len(set(members))
+        ):
+            raise PortsideError("Choose each connection only once.")
+        return cls(identifier, name.strip(), tuple(members))
+
+    def to_dict(self):
+        return {"id": self.id, "name": self.name, "proxy_ids": list(self.proxy_ids)}
+
+
+def validate_projects(projects, mappings):
+    known = {m.id for m in mappings}
+    assigned, identifiers, names = set(), set(), set()
+    for project in projects:
+        if project.id in identifiers or project.name.casefold() in names:
+            raise PortsideError("Every project needs a unique ID and name.")
+        if set(project.proxy_ids) - known:
+            raise PortsideError("A project refers to a connection that does not exist.")
+        if assigned.intersection(project.proxy_ids):
+            raise PortsideError("A connection can belong to only one project.")
+        identifiers.add(project.id)
+        names.add(project.name.casefold())
+        assigned.update(project.proxy_ids)

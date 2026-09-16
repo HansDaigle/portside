@@ -6,13 +6,13 @@ import re
 import shutil
 import socket
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from .metrics import TrafficMetrics
-from .models import PortsideError, validate_mappings
+from .models import PortsideError, validate_mappings, validate_projects
 from .recovery import RunRecord, records
 from .storage import default_state
 
@@ -96,9 +96,14 @@ class Runtime:
 
 
 class Manager:
-    def __init__(self, mappings=(), store=None, state_dir=None, binary=None, reserved_ports=()):
+    def __init__(
+        self, mappings=(), store=None, state_dir=None, binary=None, reserved_ports=(), projects=()
+    ):
         validate_mappings(mappings)
+        validate_projects(projects, mappings)
         self.mappings = {m.id: m for m in mappings}
+        self.projects = {p.id: p for p in projects}
+        self.project_pending = {}
         self.runtimes = {m.id: Runtime() for m in mappings}
         self.store = store
         self.state_dir = Path(state_dir or default_state())
@@ -155,6 +160,98 @@ class Manager:
             raise PortsideError("Mapping not found.")
         return self.mappings[identifier]
 
+    def get_project(self, identifier):
+        if identifier not in self.projects:
+            raise PortsideError("Project not found.")
+        return self.projects[identifier]
+
+    def project_snapshot(self):
+        result = []
+        for project in self.projects.values():
+            members = [self.runtimes[i] for i in project.proxy_ids]
+            running = sum(r.status == "running" for r in members)
+            errors = sum(r.status == "error" for r in members)
+            status = self.project_pending.get(project.id)
+            if not status:
+                status = (
+                    "running"
+                    if members and running == len(members)
+                    else "partial"
+                    if running
+                    else "error"
+                    if errors
+                    else "stopped"
+                )
+            result.append(
+                {
+                    **project.to_dict(),
+                    "status": status,
+                    "running_count": running,
+                    "total": len(members),
+                    "error_count": errors,
+                }
+            )
+        return result
+
+    def persist(self, mappings, projects):
+        validate_projects(list(projects.values()), list(mappings.values()))
+        if self.store:
+            self.store.save(list(mappings.values()), list(projects.values()))
+
+    async def save_project(self, project, existing_id=None):
+        async with self.lock:
+            if existing_id is not None:
+                self.get_project(existing_id)
+                if project.id != existing_id:
+                    raise PortsideError("The project ID cannot change.")
+            elif project.id in self.projects:
+                raise PortsideError("That project ID already exists.")
+            # Assigning a connection moves it out of its previous project.
+            updated = {
+                key: replace(
+                    value, proxy_ids=tuple(i for i in value.proxy_ids if i not in project.proxy_ids)
+                )
+                for key, value in self.projects.items()
+                if key != project.id
+            }
+            updated[project.id] = project
+            # Preserve the original display order on edits.
+            updated = {key: updated[key] for key in dict.fromkeys([*self.projects, project.id])}
+            self.persist(self.mappings, updated)
+            self.projects = updated
+
+    async def delete_project(self, identifier):
+        async with self.lock:
+            self.get_project(identifier)
+            updated = {k: v for k, v in self.projects.items() if k != identifier}
+            self.persist(self.mappings, updated)
+            self.projects = updated
+
+    async def project_action(self, identifier, action):
+        if action not in {"start", "stop"}:
+            raise PortsideError("Unknown project action.")
+        async with self.lock:
+            project = self.get_project(identifier)
+            results = []
+            self.project_pending[identifier] = "starting" if action == "start" else "stopping"
+            try:
+                for member in project.proxy_ids:
+                    try:
+                        if action == "start":
+                            await self._start_mapping(member)
+                        else:
+                            await self._stop_mapping(member)
+                        results.append({"id": member, "ok": True})
+                    except (PortsideError, OSError) as error:
+                        runtime = self.runtimes[member]
+                        runtime.status = "error"
+                        runtime.error = str(error)
+                        runtime.event(runtime.error)
+                        results.append({"id": member, "ok": False, "error": str(error)})
+            finally:
+                self.project_pending.pop(identifier, None)
+            return {"ok": all(r["ok"] for r in results), "results": results}
+
     async def save(self, mapping, existing_id=None):
         async with self.lock:
             if existing_id is not None:
@@ -169,8 +266,7 @@ class Manager:
                 raise PortsideError("This port is reserved for the dashboard.")
             updated = {**self.mappings, mapping.id: mapping}
             validate_mappings(list(updated.values()))
-            if self.store:
-                self.store.save(list(updated.values()))
+            self.persist(updated, self.projects)
             self.mappings = updated
             self.runtimes.setdefault(mapping.id, Runtime())
             self.runtimes[mapping.id].error = None
@@ -183,9 +279,13 @@ class Manager:
             if self.runtimes[identifier].status in {"running", "starting", "stopping"}:
                 raise PortsideError("Stop this mapping before deleting it.")
             updated = {k: v for k, v in self.mappings.items() if k != identifier}
-            if self.store:
-                self.store.save(list(updated.values()))
+            projects = {
+                key: replace(value, proxy_ids=tuple(i for i in value.proxy_ids if i != identifier))
+                for key, value in self.projects.items()
+            }
+            self.persist(updated, projects)
             self.mappings = updated
+            self.projects = projects
             del self.runtimes[identifier]
 
     async def _read_output(self, runtime):
@@ -220,70 +320,73 @@ class Manager:
 
     async def start(self, identifier):
         async with self.lock:
-            mapping = self.get(identifier)
-            runtime = self.runtimes[identifier]
-            if runtime.status == "running":
+            return await self._start_mapping(identifier)
+
+    async def _start_mapping(self, identifier):
+        mapping = self.get(identifier)
+        runtime = self.runtimes[identifier]
+        if runtime.status == "running":
+            return
+        if not self.binary:
+            raise PortsideError("Caddy is missing. Install it with: brew install caddy")
+        if mapping.port in self.reserved_ports:
+            raise PortsideError("This port is reserved for the dashboard.")
+        if runtime.reader:
+            await self._stop(runtime)
+        runtime.error = None
+        runtime.status = "starting"
+        runtime.event("Starting local listener")
+        try:
+            with socket.socket() as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind(("127.0.0.1", mapping.port))
+            runtime.record = RunRecord.create(
+                self.state_dir,
+                self.store.path if self.store else None,
+                mapping,
+                self.binary,
+                caddyfile(mapping),
+            )
+            env = {
+                **os.environ,
+                "XDG_DATA_HOME": str(self.state_dir / "caddy/data"),
+                "XDG_CONFIG_HOME": str(self.state_dir / "caddy/config"),
+            }
+            runtime.metrics = TrafficMetrics()
+            runtime.process = await asyncio.create_subprocess_exec(
+                *runtime.record.data["argv"],
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
+            )
+            runtime.reader = asyncio.create_task(self._read_output(runtime))
+            runtime.record.attach(runtime.process.pid)
+            for _ in range(100):
+                await asyncio.sleep(0.05)
+                if runtime.process.returncode is not None:
+                    await runtime.reader
+                    raise PortsideError(runtime.error or "Caddy could not start.")
+                try:
+                    _, writer = await asyncio.open_connection("127.0.0.1", mapping.port)
+                except OSError:
+                    continue
+                writer.close()
+                await writer.wait_closed()
+                runtime.status = "running"
+                runtime.event(f"Listening at {mapping.local_url}")
                 return
-            if not self.binary:
-                raise PortsideError("Caddy is missing. Install it with: brew install caddy")
-            if mapping.port in self.reserved_ports:
-                raise PortsideError("This port is reserved for the dashboard.")
-            if runtime.reader:
-                await self._stop(runtime)
-            runtime.error = None
-            runtime.status = "starting"
-            runtime.event("Starting local listener")
-            try:
-                with socket.socket() as probe:
-                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    probe.bind(("127.0.0.1", mapping.port))
-                runtime.record = RunRecord.create(
-                    self.state_dir,
-                    self.store.path if self.store else None,
-                    mapping,
-                    self.binary,
-                    caddyfile(mapping),
-                )
-                env = {
-                    **os.environ,
-                    "XDG_DATA_HOME": str(self.state_dir / "caddy/data"),
-                    "XDG_CONFIG_HOME": str(self.state_dir / "caddy/config"),
-                }
-                runtime.metrics = TrafficMetrics()
-                runtime.process = await asyncio.create_subprocess_exec(
-                    *runtime.record.data["argv"],
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    env=env,
-                    start_new_session=True,
-                )
-                runtime.reader = asyncio.create_task(self._read_output(runtime))
-                runtime.record.attach(runtime.process.pid)
-                for _ in range(100):
-                    await asyncio.sleep(0.05)
-                    if runtime.process.returncode is not None:
-                        await runtime.reader
-                        raise PortsideError(runtime.error or "Caddy could not start.")
-                    try:
-                        _, writer = await asyncio.open_connection("127.0.0.1", mapping.port)
-                    except OSError:
-                        continue
-                    writer.close()
-                    await writer.wait_closed()
-                    runtime.status = "running"
-                    runtime.event(f"Listening at {mapping.local_url}")
-                    return
-                raise PortsideError("Caddy did not open the local port within 5 seconds.")
-            except (OSError, PortsideError) as error:
-                await self._stop(runtime)
-                runtime.status = "error"
-                runtime.error = (
-                    f"Port {mapping.port} is already in use."
-                    if isinstance(error, OSError) and error.errno == errno.EADDRINUSE
-                    else str(error)
-                )
-                runtime.event(runtime.error)
-                raise PortsideError(runtime.error) from error
+            raise PortsideError("Caddy did not open the local port within 5 seconds.")
+        except (OSError, PortsideError) as error:
+            await self._stop(runtime)
+            runtime.status = "error"
+            runtime.error = (
+                f"Port {mapping.port} is already in use."
+                if isinstance(error, OSError) and error.errno == errno.EADDRINUSE
+                else str(error)
+            )
+            runtime.event(runtime.error)
+            raise PortsideError(runtime.error) from error
 
     async def _stop(self, runtime):
         runtime.status = "stopping"
@@ -306,10 +409,13 @@ class Manager:
 
     async def stop(self, identifier):
         async with self.lock:
-            self.get(identifier)
-            await self._stop(self.runtimes[identifier])
-            self.runtimes[identifier].error = None
-            self.runtimes[identifier].event("Stopped")
+            return await self._stop_mapping(identifier)
+
+    async def _stop_mapping(self, identifier):
+        self.get(identifier)
+        await self._stop(self.runtimes[identifier])
+        self.runtimes[identifier].error = None
+        self.runtimes[identifier].event("Stopped")
 
     async def close(self):
         async with self.lock:

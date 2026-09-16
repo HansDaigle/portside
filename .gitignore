@@ -10,3 +10,8 @@ build/
 output/
 .portside/
 *.toml.lock
+.env
+.env.*
+!.env.example
+*.key
+*.pem

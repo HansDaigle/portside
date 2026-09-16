@@ -31,6 +31,15 @@ Repository: [HansDaigle/portside](https://github.com/HansDaigle/portside).
 - [x] Desktop browser verification: create, start, stop, edit, validation feedback, and public HTTPS destination through localhost.
 - [ ] Narrow-width browser verification. Responsive CSS is implemented; the in-app browser's viewport override did not apply during this run.
 
+## Project grouping — implemented 2026-09-16
+
+- [x] Separate project records with stable IDs and one-project-per-connection membership.
+- [x] Single-page expandable project sections, Start/Stop, partial status, and Retry.
+- [x] Create/edit/delete dialogs; deleting a group keeps its connections and current runtime state.
+- [x] Group actions preserve other projects and already-running connections; successful starts survive partial failures.
+- [x] Backward-compatible config loading, existing CLI behavior, and grouping independent of crash-recovery ownership.
+- [x] Actual proxy tests and browser checks for partial failures, retry, editing, stop isolation, and deletion.
+
 ## Milestone 2 — Browser compatibility
 
 - [ ] Select one or two real target sites with the user and test login flows.

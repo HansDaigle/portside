@@ -1,10 +1,14 @@
 const $ = (selector) => document.querySelector(selector);
 const editor = $("#editor");
 const form = $("#connection-form");
-let state = { proxies: [], token: "", caddy_available: false };
+let state = { projects: [], proxies: [], token: "", caddy_available: false };
 let filter = "all";
 let editing = null;
 let deleting = null;
+let deletingKind = "proxies";
+let editingProject = null;
+const collapsedProjects = new Set();
+const pendingProjects = new Set();
 let viewing = null;
 let signature = "";
 let toastTimer;
@@ -56,6 +60,7 @@ async function refresh() {
     if (!response.ok)
       throw new Error("The dashboard could not load its configuration.");
     state = await response.json();
+    state.projects ||= [];
     $("#banner").hidden = state.caddy_available;
     $("#banner").textContent = state.caddy_available
       ? ""
@@ -82,6 +87,41 @@ async function refresh() {
   }
 }
 
+function projectFor(id) {
+  return state.projects.find((project) => project.proxy_ids.includes(id));
+}
+
+function projectBusy(project) {
+  return (
+    project &&
+    (pendingProjects.has(project.id) ||
+      ["starting", "stopping"].includes(project.status))
+  );
+}
+
+function connectionMarkup(p) {
+  const busy =
+    pending.has(p.id) ||
+    projectBusy(projectFor(p.id)) ||
+    ["starting", "stopping"].includes(p.status);
+  const running = p.status === "running";
+  const e = escapeHtml;
+  return `<article class="connection-row" data-connection-id="${e(p.id)}"><div class="row-heading"><h3>${e(p.name)}</h3><span class="status ${e(p.status)}">${e(p.status[0].toUpperCase() + p.status.slice(1))}</span></div><div class="row-main"><div class="route"><a href="${e(p.local_url)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${e(p.name)} at ${e(p.local_url)}">${e(p.local_url)} ↗</a><span class="route-arrow" aria-hidden="true">→</span><code>${e(p.upstream)}</code></div><div class="row-actions"><button class="${running ? "secondary" : "primary"}" data-action="${running ? "stop" : "start"}" data-id="${e(p.id)}" ${busy || (!running && !state.caddy_available) ? "disabled" : ""}>${busy ? "Working…" : running ? "Stop" : "Start"}</button><button class="icon-button" data-action="edit" data-id="${e(p.id)}" aria-label="Edit ${e(p.name)}" title="${running ? "Stop before editing" : "Edit connection"}" ${busy || running ? "disabled" : ""}>${icons.edit}</button><button class="icon-button" data-action="delete" data-id="${e(p.id)}" aria-label="Delete ${e(p.name)}" title="${running ? "Stop before deleting" : "Delete connection"}" ${busy || running ? "disabled" : ""}>${icons.delete}</button></div></div>${p.error ? `<p class="row-error">${e(p.error)}</p>` : ""}<div class="connection-metrics" data-metrics-id="${e(p.id)}"></div><div class="row-foot"><span class="capabilities">${p.https ? "LOCAL HTTPS" : "LOCAL HTTP"} · WEBSOCKETS${p.rewrite_cookies ? " · COOKIES" : ""}${p.rewrite_origin ? " · ORIGIN" : ""}</span><button class="text-button" data-action="details" data-id="${e(p.id)}">Activity & details</button></div></article>`;
+}
+
+function projectMarkup(project, rows) {
+  const e = escapeHtml;
+  const busy =
+    projectBusy(project) || project.proxy_ids.some((id) => pending.has(id));
+  const expanded = !collapsedProjects.has(project.id);
+  const allRunning =
+    project.total > 0 && project.running_count === project.total;
+  const errors = state.proxies.filter(
+    (p) => project.proxy_ids.includes(p.id) && p.error,
+  );
+  return `<section class="project-group"><header class="project-header"><button class="project-toggle" data-project-action="toggle" data-id="${e(project.id)}" aria-expanded="${expanded}" aria-controls="group-${e(project.id)}"><span aria-hidden="true">${expanded ? "▾" : "▸"}</span><span>${e(project.name)}</span></button><span class="status ${e(project.status)}">${project.running_count}/${project.total} running${busy ? " · Working…" : ""}</span><div class="project-actions">${!allRunning ? `<button class="primary" data-project-action="start" data-id="${e(project.id)}" aria-label="${project.error_count ? "Retry" : "Start"} project ${e(project.name)}" ${busy || !project.total || !state.caddy_available ? "disabled" : ""}>${project.error_count ? "Retry" : project.running_count ? "Start remaining" : "Start project"}</button>` : ""}${project.running_count ? `<button class="secondary" data-project-action="stop" data-id="${e(project.id)}" aria-label="Stop project ${e(project.name)}" ${busy ? "disabled" : ""}>Stop project</button>` : ""}<button class="icon-button" data-project-action="edit" data-id="${e(project.id)}" aria-label="Edit project ${e(project.name)}" ${busy ? "disabled" : ""}>${icons.edit}</button><button class="icon-button" data-project-action="delete" data-id="${e(project.id)}" aria-label="Delete project ${e(project.name)}" ${busy ? "disabled" : ""}>${icons.delete}</button></div></header>${errors.length ? `<div class="project-errors">${errors.map((p) => `<p>${e(p.name)}: ${e(p.error)}</p>`).join("")}</div>` : ""}<div id="group-${e(project.id)}" ${expanded ? "" : "hidden"}>${rows.length !== project.total ? `<p class="group-note">${rows.length} of ${project.total} connections shown. Project controls apply to all ${project.total}.</p>` : ""}${rows.map(connectionMarkup).join("") || '<p class="group-note">No connections yet. Edit this project to choose connections.</p>'}</div></section>`;
+}
+
 function render(force = false) {
   const query = $("#search").value.toLowerCase();
   const rows = state.proxies.filter(
@@ -90,11 +130,23 @@ function render(force = false) {
         (filter === "stopped"
           ? ["stopped", "error"].includes(p.status)
           : p.status === filter)) &&
-      `${p.name} ${p.local_url} ${p.upstream}`.toLowerCase().includes(query),
+      `${p.name} ${p.local_url} ${p.upstream} ${projectFor(p.id)?.name || ""}`
+        .toLowerCase()
+        .includes(query),
+  );
+  const projects = state.projects.filter(
+    (project) =>
+      rows.some((p) => project.proxy_ids.includes(p.id)) ||
+      (!project.total &&
+        filter === "all" &&
+        project.name.toLowerCase().includes(query)),
   );
   const nextSignature = JSON.stringify([
     rows.map(({ metrics, events, ...row }) => row),
+    state.projects,
     [...pending],
+    [...pendingProjects],
+    [...collapsedProjects],
     state.proxies.length,
     query,
     filter,
@@ -104,30 +156,42 @@ function render(force = false) {
     return;
   }
   signature = nextSignature;
-  const focus = document.activeElement?.closest("[data-action]");
+  const focus = document.activeElement?.closest(
+    "[data-action], [data-project-action]",
+  );
   const focusedId = focus?.dataset.id;
   const focusedAction = focus?.dataset.action;
-  if (!rows.length) {
-    $("#connection-list").innerHTML = state.proxies.length
-      ? '<div class="empty"><h2>No matching connections.</h2><p>Try another search or filter.</p></div>'
-      : '<div class="empty"><div class="empty-art" aria-hidden="true"><div class="endpoint-box">:↗</div><div class="connection-line"></div><div class="endpoint-box remote">◎</div></div><h2>A place for your first connection.</h2><p>Pick a local port and a destination. Portside takes care of the journey between them.</p><button class="primary" data-action="new">Create a connection <span aria-hidden="true">＋</span></button><button class="text-button" data-action="example">Try it with example.com</button></div>';
+  const focusedProjectAction = focus?.dataset.projectAction;
+  if (!rows.length && !projects.length) {
+    $("#connection-list").innerHTML =
+      state.proxies.length || state.projects.length
+        ? '<div class="empty"><h2>No matching connections.</h2><p>Try another search or filter.</p></div>'
+        : '<div class="empty"><h2>A place for your first project.</h2><p>Create connections, then group them to start everything together.</p><button class="primary" data-action="new">Create a connection ＋</button><button class="text-button" data-action="example">Try it with example.com</button></div>';
+    renderTelemetry();
     return;
   }
-  $("#connection-list").innerHTML = rows
-    .map((p) => {
-      const busy =
-        pending.has(p.id) || ["starting", "stopping"].includes(p.status);
-      const running = p.status === "running";
-      const e = escapeHtml;
-      return `<article class="connection-row" data-connection-id="${e(p.id)}"><div class="row-heading"><h3>${e(p.name)}</h3><span class="status ${e(p.status)}">${e(p.status[0].toUpperCase() + p.status.slice(1))}</span></div><div class="row-main"><div class="route"><a href="${e(p.local_url)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${e(p.name)} at ${e(p.local_url)}">${e(p.local_url)} ↗</a><span class="route-arrow" aria-hidden="true">→</span><code>${e(p.upstream)}</code></div><div class="row-actions"><button class="${running ? "secondary" : "primary"}" data-action="${running ? "stop" : "start"}" data-id="${e(p.id)}" ${busy || (!running && !state.caddy_available) ? "disabled" : ""}>${busy ? "Working…" : running ? "Stop" : "Start"}</button><button class="icon-button" data-action="edit" data-id="${e(p.id)}" aria-label="Edit ${e(p.name)}" title="${running ? "Stop before editing" : "Edit connection"}" ${busy || running ? "disabled" : ""}>${icons.edit}</button><button class="icon-button" data-action="delete" data-id="${e(p.id)}" aria-label="Delete ${e(p.name)}" title="${running ? "Stop before deleting" : "Delete connection"}" ${busy || running ? "disabled" : ""}>${icons.delete}</button></div></div>${p.error ? `<p class="row-error">${e(p.error)}</p>` : ""}<div class="connection-metrics" data-metrics-id="${e(p.id)}"></div><div class="row-foot"><span class="capabilities">${p.https ? "LOCAL HTTPS" : "LOCAL HTTP"} · WEBSOCKETS${p.rewrite_cookies ? " · COOKIES" : ""}${p.rewrite_origin ? " · ORIGIN" : ""}</span><button class="text-button" data-action="details" data-id="${e(p.id)}">Activity & details</button></div></article>`;
-    })
-    .join("");
+  const ungrouped = rows.filter((p) => !projectFor(p.id));
+  $("#connection-list").innerHTML =
+    projects
+      .map((project) =>
+        projectMarkup(
+          project,
+          rows.filter((p) => project.proxy_ids.includes(p.id)),
+          query,
+        ),
+      )
+      .join("") +
+    (ungrouped.length
+      ? `<section class="ungrouped"><h2 class="ungrouped-title">Ungrouped <span>${ungrouped.length}</span></h2>${ungrouped.map(connectionMarkup).join("")}</section>`
+      : "");
   renderTelemetry();
   if (focusedId)
-    [...document.querySelectorAll("[data-action]")]
+    [...document.querySelectorAll("[data-action], [data-project-action]")]
       .find(
         (el) =>
-          el.dataset.id === focusedId && el.dataset.action === focusedAction,
+          el.dataset.id === focusedId &&
+          el.dataset.action === focusedAction &&
+          el.dataset.projectAction === focusedProjectAction,
       )
       ?.focus();
 }
@@ -268,6 +332,99 @@ function showInfo(title, html) {
   $("#info-dialog").showModal();
 }
 
+function openProjectEditor(project = null) {
+  editingProject = project?.id || null;
+  const projectForm = $("#project-form");
+  projectForm.reset();
+  projectForm.elements.name.value = project?.name || "";
+  $("#project-title").textContent = project ? "Edit project" : "New project";
+  $("#project-error").hidden = true;
+  $("#save-project-button").disabled = false;
+  $("#project-choices").innerHTML =
+    state.proxies
+      .map((p) => {
+        const owner = projectFor(p.id);
+        return `<label class="check project-choice"><input type="checkbox" name="proxy_ids" value="${escapeHtml(p.id)}" ${project?.proxy_ids.includes(p.id) ? "checked" : ""} /><span>${escapeHtml(p.name)}<small>${escapeHtml(p.local_url)} · ${owner ? `Currently in ${escapeHtml(owner.name)}` : "Ungrouped"}</small></span></label>`;
+      })
+      .join("") ||
+    '<p class="field-help">Create a connection first, or save an empty project for later.</p>';
+  $("#project-editor").showModal();
+  projectForm.elements.name.focus();
+}
+
+$("#add-project-button").addEventListener("click", () => openProjectEditor());
+$("#project-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const projectForm = event.currentTarget;
+  const data = {
+    name: projectForm.elements.name.value,
+    proxy_ids: [
+      ...projectForm.querySelectorAll('input[name="proxy_ids"]:checked'),
+    ].map((el) => el.value),
+  };
+  $("#save-project-button").disabled = true;
+  $("#project-error").hidden = true;
+  try {
+    await api(
+      editingProject ? `/api/projects/${editingProject}` : "/api/projects",
+      editingProject ? "PUT" : "POST",
+      data,
+    );
+    $("#project-editor").close();
+    await refresh();
+    toast(editingProject ? "Project updated" : "Project saved");
+  } catch (error) {
+    $("#project-error").textContent = error.message;
+    $("#project-error").hidden = false;
+  } finally {
+    $("#save-project-button").disabled = false;
+  }
+});
+
+async function handleProjectAction(button) {
+  if (button.disabled) return;
+  const project = state.projects.find((p) => p.id === button.dataset.id);
+  if (!project) return;
+  const action = button.dataset.projectAction;
+  if (action === "toggle") {
+    if (collapsedProjects.has(project.id)) collapsedProjects.delete(project.id);
+    else collapsedProjects.add(project.id);
+    render();
+    return;
+  }
+  if (action === "edit") return openProjectEditor(project);
+  if (action === "delete") {
+    deleting = project.id;
+    deletingKind = "projects";
+    $("#delete-title").textContent = "Delete project?";
+    $("#delete-description").textContent =
+      `Remove “${project.name}”? Its connections will move to Ungrouped and keep their current running state.`;
+    $("#confirm-delete").textContent = "Delete project";
+    $("#delete-dialog .close-dialog").textContent = "Keep project";
+    $("#delete-error").hidden = true;
+    $("#delete-dialog").showModal();
+    return;
+  }
+  pendingProjects.add(project.id);
+  render(true);
+  try {
+    const result = await api(`/api/projects/${project.id}/${action}`, "POST");
+    if (!result.ok) collapsedProjects.delete(project.id);
+    toast(
+      result.ok
+        ? action === "start"
+          ? "Project connections are running"
+          : "Project connections stopped"
+        : "Some connections need attention · see project errors",
+    );
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    pendingProjects.delete(project.id);
+    await refresh();
+  }
+}
+
 $("#connections-button").addEventListener("click", () => {
   $("#main").scrollIntoView({ behavior: "instant" });
 });
@@ -281,7 +438,10 @@ document
   .forEach((button) =>
     button.addEventListener("click", () => button.closest("dialog").close()),
   );
-$("#search").addEventListener("input", () => render());
+$("#search").addEventListener("input", () => {
+  collapsedProjects.clear();
+  render();
+});
 document.querySelectorAll("[data-filter]").forEach((button) =>
   button.addEventListener("click", () => {
     filter = button.dataset.filter;
@@ -324,6 +484,8 @@ form.addEventListener("submit", async (event) => {
 });
 
 $("#connection-list").addEventListener("click", async (event) => {
+  const projectButton = event.target.closest("[data-project-action]");
+  if (projectButton) return handleProjectAction(projectButton);
   const button = event.target.closest("[data-action]");
   if (!button || button.disabled) return;
   const action = button.dataset.action;
@@ -341,6 +503,10 @@ $("#connection-list").addEventListener("click", async (event) => {
   }
   if (action === "delete") {
     deleting = mapping.id;
+    deletingKind = "proxies";
+    $("#delete-title").textContent = "Delete connection?";
+    $("#confirm-delete").textContent = "Delete connection";
+    $("#delete-dialog .close-dialog").textContent = "Keep connection";
     $("#delete-description").textContent =
       `Remove “${mapping.name}” from your saved connections?`;
     $("#delete-error").hidden = true;
@@ -365,10 +531,14 @@ $("#connection-list").addEventListener("click", async (event) => {
 $("#confirm-delete").addEventListener("click", async () => {
   $("#confirm-delete").disabled = true;
   try {
-    await api(`/api/proxies/${deleting}`, "DELETE");
+    await api(`/api/${deletingKind}/${deleting}`, "DELETE");
     $("#delete-dialog").close();
     await refresh();
-    toast("Connection deleted");
+    toast(
+      deletingKind === "projects"
+        ? "Project removed · connections kept"
+        : "Connection deleted",
+    );
   } catch (error) {
     $("#delete-error").textContent = error.message;
     $("#delete-error").hidden = false;
@@ -386,7 +556,7 @@ $("#config-button").addEventListener("click", () =>
 $("#help-button").addEventListener("click", () =>
   showInfo(
     "A shorter way there.",
-    "<ol><li><strong>Create a connection.</strong> Pick a name, local port, and HTTP or HTTPS destination.</li><li><strong>Start it.</strong> Open the local URL to use your destination through Portside.</li><li><strong>Stop when finished.</strong> Your mapping stays saved for next time.</li></ol><p>Prefer the terminal?</p><code>portside --port 4444 --to https://example.com</code><p>For browser logins, consider local HTTPS and a unique .localhost hostname. Trust the local certificate explicitly. Some sites also need cookie/origin translation or callback configuration; arbitrary login flows are not guaranteed.</p><p>Ctrl+C in the dashboard terminal stops its running connections. WebSockets are supported automatically.</p>",
+    "<p><strong>Work by project.</strong> Create a project and select its connections. Start or stop the whole project together; other projects keep running. If one connection fails, successful ones stay up and Retry starts the rest.</p><ol><li><strong>Create a connection.</strong> Pick a name, local port, and HTTP or HTTPS destination.</li><li><strong>Start it.</strong> Open the local URL to use your destination through Portside.</li><li><strong>Stop when finished.</strong> Your mapping stays saved for next time.</li></ol><p>Prefer the terminal?</p><code>portside --port 4444 --to https://example.com</code><p>For browser logins, consider local HTTPS and a unique .localhost hostname. Trust the local certificate explicitly. Some sites also need cookie/origin translation or callback configuration; arbitrary login flows are not guaranteed.</p><p>Ctrl+C in the dashboard terminal stops its running connections. WebSockets are supported automatically.</p>",
   ),
 );
 refresh();

@@ -4,7 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Portside — Local connections</title>
-    <link rel="icon" href="/static/favicon.png" type="image/png" sizes="64x64" />
+    <link
+      rel="icon"
+      href="/static/favicon.png"
+      type="image/png"
+      sizes="64x64"
+    />
     <link rel="stylesheet" href="/static/style.css" />
     <script src="/static/app.js" defer></script>
   </head>
@@ -51,9 +56,12 @@
           <h1>Your local connections.</h1>
           <p class="subtitle">Give any destination a place on your machine.</p>
         </div>
-        <button class="primary" id="add-button">
-          <span aria-hidden="true">＋</span> New connection
-        </button>
+        <div class="heading-actions">
+          <button class="secondary" id="add-project-button">New project</button
+          ><button class="primary" id="add-button">
+            <span aria-hidden="true">＋</span> New connection
+          </button>
+        </div>
       </section>
       <div id="banner" role="alert" hidden></div>
       <div class="overview">
@@ -203,6 +211,46 @@
       <div class="dialog-footer">
         <button class="secondary close-dialog">Close</button>
       </div>
+    </dialog>
+    <dialog id="project-editor" aria-labelledby="project-title">
+      <form id="project-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">WORK TOGETHER</p>
+            <h2 id="project-title">New project</h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button close-dialog"
+            aria-label="Close project editor"
+          >
+            ×
+          </button>
+        </div>
+        <label
+          >Project name<input
+            name="name"
+            required
+            maxlength="80"
+            placeholder="My project"
+            autocomplete="off"
+        /></label>
+        <fieldset class="project-members">
+          <legend>Connections</legend>
+          <p class="field-help">
+            Selected connections move into this project. Grouping them does not
+            restart them.
+          </p>
+          <div id="project-choices"></div>
+        </fieldset>
+        <p class="form-error" id="project-error" role="alert" hidden></p>
+        <div class="dialog-footer">
+          <button type="button" class="secondary close-dialog">Cancel</button
+          ><button type="submit" class="primary" id="save-project-button">
+            Save project
+          </button>
+        </div>
+      </form>
     </dialog>
     <dialog id="delete-dialog" aria-labelledby="delete-title">
       <h2 id="delete-title">Delete connection?</h2>

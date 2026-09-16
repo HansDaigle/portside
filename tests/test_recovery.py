@@ -11,6 +11,7 @@ from aiohttp import ClientSession
 from test_integration import free_port, make_mapping, running_app, upstream_server
 
 from portside.engine import Manager
+from portside.models import Project
 from portside.recovery import RunRecord, records
 from portside.server import create_app
 from portside.storage import Store
@@ -24,7 +25,7 @@ async def test_interrupted_cli_and_dashboard_recovery(tmp_path, exit_signal):
         mappings = [make_mapping(upstream, id="one"), make_mapping(upstream, id="two")]
         config = tmp_path / "proxies.toml"
         store = Store(config)
-        store.save(mappings)
+        store.save(mappings, [Project("work", "Work", tuple(m.id for m in mappings))])
         state_dir = tmp_path / "state" / "portside"
         process = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -68,7 +69,8 @@ async def test_interrupted_cli_and_dashboard_recovery(tmp_path, exit_signal):
                 ):
                     async with client.get(base + "/api/state") as response:
                         state = await response.json()
-                    assert {p["status"] for p in state["proxies"]} == {"running"}
+                        assert {p["status"] for p in state["proxies"]} == {"running"}
+                        assert state["projects"][0]["running_count"] == 2
                     assert all(
                         any("Recovery complete" in e["message"] for e in p["events"])
                         for p in state["proxies"]

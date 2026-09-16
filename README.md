@@ -8,6 +8,12 @@ Remote destinations. Local ports. A local dashboard and CLI for saved reverse pr
 
 Manage connections on one page. Each connection shows request volume and average duration over the last minute; setup, totals, and recent events open in dialogs.
 
+## Work by project
+
+Click **New project**, name it, and select its connections. **Start project** and **Stop project** control the group; other projects keep running. If a connection fails, successful ones stay up: the project shows **2/3 running**, the error, and **Retry**.
+
+Expand a project for individual controls and graphs. Editing a project can move running connections without restarting them. Deleting a project keeps its connections under **Ungrouped**.
+
 <details>
 <summary>Connection details</summary>
 
@@ -53,6 +59,7 @@ Use `uv tool install --editable .` to install the command outside this checkout.
 - Default config: `~/.config/portside/proxies.toml`. Runtime state: `~/.local/state/portside/`.
 - After a clean shutdown, saved mappings open stopped. If a previous session crashed and left proxies running, the dashboard verifies their ownership and restarts them automatically to restore controls and graphs. Existing connections briefly reconnect; counters reset. The config CLI starts all mappings together.
 - One manager owns a config file at a time. Stop it before editing the file externally.
+- Projects are saved as `[[projects]]` entries with stable IDs and `proxy_ids`; old configs without projects still work. Older Portside versions cannot read the new entries: stop Portside and restore your pre-project config backup before downgrading.
 - Local HTTPS is optional; certificate trust is installed explicitly by the user.
 - Running means the proxy is listening, not that its upstream has passed a health check.
 
